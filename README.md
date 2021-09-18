@@ -19,5 +19,5 @@ Few configuration options are available:
 
 #### Running without Virtualenv
 1. Install dependencies `pip install -r requirements.txt`
-2. Run script `./run.sh` (or better `./run.sh --help`)
+2. Run script `./run.py` (or better `./run.py --help`)
 
