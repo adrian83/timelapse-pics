@@ -7,6 +7,7 @@ Few configuration options are available:
 - defining images resolution
 - choosing location for taken pictures
 - defining interval
+- making video from taken pictures (requires ffmpeg)
 
 ### Running
 
@@ -14,7 +15,7 @@ Few configuration options are available:
 1. Create virtualenv `virtualenv venv`
 2. Activate virtualenv `source venv/bin/activate`
 3. Install dependencies `pip install -r requirements.txt`
-4. Run script `./run.sh` (or better `./run.sh --help`)
+4. Run script `./run.py` (or better `./run.py --help`)
 5. Deactivate virtualenv `deactivate`
 
 #### Running without Virtualenv

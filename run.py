@@ -1,90 +1,150 @@
 #!/usr/bin/env python
 
+import logging
+import time
+from datetime import datetime
+import argparse
+import subprocess
+import sys
+
+from os.path import expanduser, sep, exists, getsize
+from os import makedirs
+
 import pygame
 import pygame.camera
 
-import time
-from datetime import datetime
 
-import argparse
+logging.basicConfig(
+    level=logging.INFO
+)
 
-from os.path import expanduser, sep, isdir, exists, isfile, join, getsize
-from os import makedirs, listdir
+_IMAGE_NUMBER_FORMAT = "05d"
+_IMAGE_POSTFIX = r"{:" + _IMAGE_NUMBER_FORMAT + r"}"
+_IMAGE_PREFIX = "img"
+
+_TIMEDATE_FORMAT = "%Y_%m_%d__%H_%M_%S"
+
+_MEGA_BYTE = 1024 * 1024
+
+_DEFAULT_MAKE_VIDEO = 'n'
+_DEFAULT_RESOLUTION = '640x480'
+_DEFAULT_MAXSIZE_MB = 100
+_DEFAULT_DESTINATION = expanduser("~") + sep + "timelapse-pics"
+_DEFAULT_INTERVAL_SEC = 10
 
 
+def check_ffmpeg():
+    '''Checks if ffmpeg is instaled'''
+    output = subprocess.run(['which', 'ffmpeg'], check=True, stdout=subprocess.PIPE)
+    return output.stdout.decode('utf-8').strip() != ""
 
-mega_byte = 1024 * 1024
 
-def create_dir_if_not_exists(dir_path):
+def create_dir_if_not_exist(dir_path):
+    '''Creates directory if it doesn't exist'''
     if not exists(dir_path):
         makedirs(dir_path)
 
 def to_bytes(mega_bytes):
-    return mega_bytes * mega_byte
+    '''Turns MB to B'''
+    return mega_bytes * _MEGA_BYTE
 
 
 def default_camera():
+    '''Returns location of camera'''
     pygame.camera.init()
     cams = pygame.camera.list_cameras()
     return cams[0]
 
-default_resolution = '640x480'
-default_maxsize = 100 # MB
-default_destination = expanduser("~") + sep + "timelapse-pics"
-default_interval = 10 # sec
-
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--camera', default=default_camera(), help='mount point of camera (e.g. /dev/video0)')
-parser.add_argument('--resolution', default=default_resolution, help='resolution of images (e.g. 640x480)')
-parser.add_argument('--maxsize', default=str(default_maxsize), type=int, help='max size of images in MB (e.g. 100)')
-parser.add_argument('--interval', default=str(default_interval), type=int, help='default interval (in secunds) between taken images (e.g. 10')
-parser.add_argument('--destination', default=default_destination, help='path to directory for storing images')
+
+parser.add_argument(
+    '--camera',
+    default=default_camera(),
+    help='mount point of camera (e.g. /dev/video0)'
+    )
+
+parser.add_argument(
+    '--resolution',
+    default=_DEFAULT_RESOLUTION,
+    help='resolution of images (e.g. 640x480)'
+    )
+
+parser.add_argument(
+    '--maxsize',
+    default=str(_DEFAULT_MAXSIZE_MB),
+    type=int,
+    help='max size of images in MB (e.g. 100)'
+    )
+
+parser.add_argument(
+    '--interval',
+    default=str(_DEFAULT_INTERVAL_SEC),
+    type=int,
+    help='default interval (in secunds) between taken images (e.g. 10)'
+    )
+
+parser.add_argument(
+    '--destination',
+    default=_DEFAULT_DESTINATION,
+    help='path to directory for storing images'
+    )
+
+parser.add_argument(
+    '--video',
+    default=_DEFAULT_MAKE_VIDEO,
+    help='create video from pictures',
+    choices=['y', 'n']
+    )
+
+args = parser.parse_args()
 
 
-class CmdArgs:
-    pass
-
-cmd_args = CmdArgs
-args = parser.parse_args(namespace=cmd_args)
-
-
-print("")
-print("Camera mounted at {0} will be used".format(cmd_args.camera))
-print("Images will have resolution {0}".format(cmd_args.resolution))
-print("Images will take at max {0}MB (+1 image)".format(cmd_args.maxsize))
-print("Images will be taken every {0}s".format(cmd_args.interval))
-print("Images will be stored at {0}".format(cmd_args.destination))
-print("")
+logging.info("Camera mounted at %s will be used", args.camera)
+logging.info("Images will have resolution %s", args.resolution)
+logging.info("Images will take at max %sMB (+1 image)", args.maxsize)
+logging.info("Images will be taken every %ss", args.interval)
+logging.info("Images will be stored at %s", args.destination)
+logging.info("Video will be created %s", args.video)
 
 
 class StorageSpaceExceeded(Exception):
+    '''Exception raised when designated memory is full'''
 
-    def __init__(self, max, taken):
-        self._max = max
+    def __init__(self, maxsize, taken):
+        self._max = maxsize
         self._taken = taken
 
     def __str__(self):
-        return "Used {0}MB disk space from available {1}MB".format(int(self._taken/mega_byte), self._max/mega_byte)
+        used_s = int(self._taken/_MEGA_BYTE)
+        max_s = int(self._max/_MEGA_BYTE)
+        return f"Used {used_s}MB disk space from available {max_s}MB"
 
 
 class SdCard:
+    '''Manages stored pictures'''
 
-    def __init__(self, size, dir):
-        self._dir = dir
+    def __init__(self, size, directory):
+        self._dir = directory
         self._size = size
         self._used = 0
         self._files = 0
 
+    def storage_location(self):
+        '''Returns path to dorectory that contains taken photos'''
+        return self._dir
+
     def store(self, img):
-        number = "{:05d}".format(self._files)
-        self._files += 1
-        img_path = self._dir + sep + "img" + number + ".jpg"
+        '''Stores given image'''
+        img_number = _IMAGE_POSTFIX.format(self._files)
+        img_path = self._dir + sep + _IMAGE_PREFIX + img_number + ".jpg"
 
         pygame.image.save(img, img_path)
         img_size = getsize(img_path)
 
-        print("Image {0} persisted".format(img_path))
+        self._files += 1
+
+        logging.info("Image %s persisted", img_path)
 
         self._used += img_size
         if self._used > self._size:
@@ -92,6 +152,7 @@ class SdCard:
 
 
 class Camera:
+    '''Simplifies taking pictures with pygame and making videos with ffmpeg'''
 
     def __init__(self, mount_dir, resolution, card):
         self._card = card
@@ -102,46 +163,74 @@ class Camera:
         self._cam = pygame.camera.Camera(mount_dir, res)
         self._cam.start()
 
+    def pics_location(self):
+        '''Returns path to dorectory that contains taken photos'''
+        return self._card.storage_location()
+
     def make_image(self):
+        '''Takes photo and stores it'''
         img = self._cam.get_image()
         self._card.store(img)
 
+    def generate_movie(self):
+        '''Generates mp4 from taken pictures'''
+        logging.info("generationg video started")
+        subprocess.call([
+            'ffmpeg',
+            '-framerate', '1',
+            '-i', self.pics_location() + sep + "img" + '%' + _IMAGE_NUMBER_FORMAT + ".jpg",
+            '-c:v', 'libx264',
+            '-profile:v', 'high',
+            '-crf', '20',
+            '-pix_fmt', 'yuv420p',
+            self.pics_location() + sep + 'output.mp4'
+        ])
+        logging.info("generationg video ended")
+
+
 
 class TimelapseMaker:
+    '''High level object for taking mulitiple pictures and generating videos'''
 
-    def __init__(self, camera, interval):
-        self._camera = camera
+    def __init__(self, pics_camera, interval, make_vid):
+        self._camera = pics_camera
         self._interval = interval
+        self._make_video = make_vid
 
     def take_timelapse_images(self):
-        while True:
-            self._camera.make_image()
-            time.sleep(self._interval)
+        '''Takes pictures until the designated memory is full'''
+        try:
+            while True:
+                self._camera.make_image()
+                time.sleep(self._interval)
+
+        except StorageSpaceExceeded as storage_ex:
+            logging.info("error: %s", storage_ex)
+            if self._make_video:
+                self._camera.generate_movie()
 
 
 
-sd_card_location = cmd_args.destination + sep + datetime.now().strftime("%Y_%m_%d__%H_%M_%S")
 
-create_dir_if_not_exists(cmd_args.destination)
-create_dir_if_not_exists(sd_card_location)
+make_video = args.video == 'y'
 
-sd_card = SdCard(to_bytes(cmd_args.maxsize), sd_card_location)
+if make_video and not check_ffmpeg():
+    logging.error("making video not supported, please install ffmpeg")
+    sys.exit(1)
 
-camera = Camera(cmd_args.camera, cmd_args.resolution, sd_card)
+sd_card_location = args.destination + sep + datetime.now().strftime(_TIMEDATE_FORMAT)
 
-maker = TimelapseMaker(camera, cmd_args.interval)
+create_dir_if_not_exist(args.destination)
+create_dir_if_not_exist(sd_card_location)
+
+sd_card = SdCard(to_bytes(args.maxsize), sd_card_location)
+
+camera = Camera(args.camera, args.resolution, sd_card)
+
+maker = TimelapseMaker(camera, args.interval, make_video)
+
+maker.take_timelapse_images()
 
 
-try:
-    maker.take_timelapse_images()
-
-except StorageSpaceExceeded as e:
-    print("")
-    print(e)
-
-except Exception as e:
-    print("")
-    print(str(e))
-
-print("EXITING...")
-print("")
+logging.info("EXITING...")
+sys.exit(0)
